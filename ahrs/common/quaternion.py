@@ -590,7 +590,7 @@ class Quaternion(np.ndarray):
     (0.2722i -0.4082j +0.5443k -0.6804)
 
     """
-    def __new__(subtype, q: Union[int, list, np.ndarray] = None, versor: bool = True, **kwargs):
+    def __new__(subtype, q: Union[int, list, np.ndarray] = None, versor: bool = False, **kwargs):
         if q is None:
             q = np.array([1.0, 0.0, 0.0, 0.0])
             if kwargs.pop('random', False):
@@ -1732,7 +1732,7 @@ class Quaternion(np.ndarray):
             [2.0*(self.x*self.y+self.w*self.z), 1.0-2.0*(self.x**2+self.z**2), 2.0*(self.y*self.z-self.w*self.x)],
             [2.0*(self.x*self.z-self.w*self.y), 2.0*(self.w*self.x+self.y*self.z), 1.0-2.0*(self.x**2+self.y**2)]])
 
-    def from_DCM(self, dcm: np.ndarray, method: str = 'chiaverini', **kw) -> np.ndarray:
+    def from_DCM(self, dcm: np.ndarray, method: str = 'shepperd', **kw) -> np.ndarray:
         """
         Quaternion from Direction Cosine Matrix.
 
@@ -2095,7 +2095,7 @@ class QuaternionArray(np.ndarray):
                      [ 0.17094453, -0.3723117 ,  0.54109885, -0.73442086],
                      [ 0.1862619 , -0.38421818,  0.5260265 , -0.73551276]])
     """
-    def __new__(subtype, q: np.ndarray = None, versors: bool = True, order: str = 'H', **kwargs):
+    def __new__(subtype, q: np.ndarray = None, versors: bool = False, order: str = 'H', **kwargs):
         # Create a quaternion from a parameter, if q is not given as first argument
         if q is None:
             if 'rpy' in kwargs:
@@ -2117,13 +2117,17 @@ class QuaternionArray(np.ndarray):
         if q.ndim != 2 or q.shape[-1] not in [3, 4]:
             raise ValueError(f"Expected array to have shape (N, 4) or (N, 3), got {q.shape}.")
         q_norm = np.linalg.norm(q, axis=1)
-        if sum(~(q_norm > 0)):
-            raise ValueError("Quaternion values must be non-zero.")
+        ind0 = np.where(q_norm == 0.0)[0]
+
+        # if sum(~(q_norm > 0)):
+        #     raise ValueError("Quaternion values must be non-zero.")
 
         # Build pure quaternions if given as N-by-3 array
+        qshape = q.shape
         if q.shape[-1] == 3:
-            q = np.c_[np.zeros(q.shape[0]), q]
-
+            q = np.concatenate((np.zeros([q.shape[0],1]), q), axis=1)
+        if ind0.size>0:
+            q[ind0,0] += 1.0
         # Normalize quaternions if versors is True
         if versors:
             q = q / q_norm[:, None]
@@ -2131,7 +2135,10 @@ class QuaternionArray(np.ndarray):
         # Create the ndarray instance of type QuaternionArray. This will call
         # the standard ndarray constructor, but return an object of type
         # QuaternionArray.
-        obj = super(QuaternionArray, subtype).__new__(subtype, q.shape, float, q)
+        if qshape[-1] == 3:
+            obj = super(QuaternionArray, subtype).__new__(subtype, q.shape, float, q.reshape(-1))
+        else:
+            obj = super(QuaternionArray, subtype).__new__(subtype, q.shape, float, q)
         obj.array = q
         obj.scalar_vector = False if order == 'S' else True
         obj.num_qts = q.shape[0]
@@ -3042,14 +3049,19 @@ class QuaternionArray(np.ndarray):
             (N-1)-by-3 array with angular velocities in rad/s.
 
         """
-        if not isinstance(dt, float):
-            raise TypeError(f"dt must be a float. Got {type(dt)}.")
-        if dt <= 0:
-            raise ValueError(f"dt must be greater than zero. Got {dt}.")
+        if isinstance(dt, float):               
+            if dt <= 0:
+                raise ValueError(f"dt must be greater than zero. Got {dt}.")
+        elif len(dt) != (self.num_qts-1):
+            raise TypeError(f"Size is not compatible.")
         w = np.c_[
             self.w[:-1]*self.x[1:] - self.x[:-1]*self.w[1:] - self.y[:-1]*self.z[1:] + self.z[:-1]*self.y[1:],
             self.w[:-1]*self.y[1:] + self.x[:-1]*self.z[1:] - self.y[:-1]*self.w[1:] - self.z[:-1]*self.x[1:],
             self.w[:-1]*self.z[1:] - self.x[:-1]*self.y[1:] + self.y[:-1]*self.x[1:] - self.z[:-1]*self.w[1:]]
+        
+        if isinstance(dt, np.ndarray):
+            return 2.0 * w / (np.ones((3, 1))*dt).T
+        
         return 2.0 * w / dt
 
     def slerp_nan(self, inplace: bool = True) -> np.ndarray:
